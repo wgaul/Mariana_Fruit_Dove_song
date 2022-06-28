@@ -3,7 +3,7 @@
 ## 
 ## author: Willson Gaul  willson.gaul@gmail.com
 ## created: 11 March 2022
-## last modified: 15 June 2022
+## last modified: 24 June 2022
 ######################
 
 library(tidyverse)
@@ -11,13 +11,12 @@ library(GGally)
 
 setwd("~/Documents/Data_Analysis/bird_song/")
 
-dove_song <- read_csv("./data/Jaden_Fruit_Dove_Sound_Data.csv",
-                      na = c("NA", "N/A", ""))
-dove_song[which(dove_song$Island == "rota"), 1:2]
+# dove_song <- read_csv("./data/Jaden_Fruit_Dove_Sound_Data.csv",
+                      # na = c("NA", "N/A", ""))
+# dove_song[which(dove_song$Island == "rota"), 1:2]
 # dove_song
-margo_dove <- read_csv("./data/Margo_v_WG_Fruit_Dove_Sound_Data_13June2022.csv")
-# drop rows that are examples from Jaden
-# margo_dove <- margo_dove[-c(1, 2), ]
+# margo_dove <- read_csv("./data/Margo_v_WG_Fruit_Dove_Sound_Data_13June2022.csv")
+margo_dove <- read_csv("./data/Margo_Fruit_Dove_Sound_Data_24June2022.csv")
 
 # drop blank rows
 margo_dove <- margo_dove[which(!is.na(margo_dove$Filename)), ]
@@ -28,6 +27,13 @@ margo_dove <- margo_dove[-c(1:2), ]
 # Make island column
 # This will require incorporating info from another file at some point
 margo_dove$Island <- gsub("_.*", "", margo_dove$Filename)
+warning("Update this to incorporate info from another file at some point")
+margo_dove$Island[which(margo_dove$Filename %in% 
+                          c("0226_084100_MarianaFruitDove", 
+                            "0306_071304_MarianaFruitDove", 
+                            "MAFD_0620_065345", "MAFD_0620_072839", 
+                            "Mariana_Fruit_Dove_20220416", 
+                            "Mariana_Fruit_Dove_20220417"))] <- "Saipan"
 
 # make frequency numeric
 # dove_song$Freq_peak_S1 <- gsub(" Hz.*", "", dove_song$Freq_peak_S1)
@@ -42,23 +48,23 @@ margo_dove$id <- paste(margo_dove$Filename,
                        margo_dove$`start_time_of_song_hh:mm:ss`, sep = "_")
 
 ### Graphs
-t_size <- 35
+t_size <- 25
 
 ## Compare WG and Margo's measurements
-margo_long <- pivot_longer(margo_dove, song_duration_sec:Freq_peak_S1)
+margo_wg_long <- pivot_longer(margo_wg_dove, song_duration_sec:Freq_peak_S1)
 # spread to get different columns for each observer
-margo_long$name <- paste(margo_long$technician, margo_long$name, sep = "_")
+margo_wg_long$name <- paste(margo_wg_long$technician, margo_long$name, sep = "_")
 # drop technician column so spreading works better
-margo_long <- margo_long[, -which(colnames(margo_long) == "technician")]
-margo_wide <- pivot_wider(margo_long, id_cols = "id")
+margo_wg_long <- margo_wg_long[, -which(colnames(margo_wg_long) == "technician")]
+margo_wg_wide <- pivot_wider(margo_wg_long, id_cols = "id")
 
 # get only songs measured by all observers
-wg_songs <- unique(margo_dove$id[margo_dove$technician == "WG"])
-mq_songs <- unique(margo_dove$id[margo_dove$technician == "MQ"])
+wg_songs <- unique(margo_wg_dove$id[margo_wg_dove$technician == "WG"])
+mq_songs <- unique(margo_wg_dove$id[margo_wg_dove$technician == "MQ"])
 shared_songs <- mq_songs[which(mq_songs %in% wg_songs)]
 
 # put songs measured by all observers into a df
-shared_song_df <- margo_wide[which(margo_wide$id %in% shared_songs), ]
+shared_song_df <- margo_wg_wide[which(margo_wg_wide$id %in% shared_songs), ]
 
 plot(shared_song_df$MQ_song_duration_sec, shared_song_df$WG_song_duration_sec)
 abline(a = 0, b = 1)
@@ -105,10 +111,37 @@ abline(a = 0, b = 1)
 cor(shared_song_df$MQ_Freq_peak_S1, shared_song_df$WG_Freq_peak_S1, 
     use = "complete.obs", method = c("spearman"))
 
-margo_dove <- margo_dove[-which(margo_dove$Island == "old"), ]
-ggplot(data = margo_dove[which(margo_dove$technician == "MQ"), ]) + 
-  geom_histogram(aes(x = Freq_peak_S1)) + 
-  facet_wrap(~Island, ncol = 1)
+margo_dove <- margo_dove[margo_dove$Island != "old", ]
+
+song_length_plot <- ggplot(data = margo_dove) + 
+  geom_histogram(aes(x = song_duration_sec), binwidth = 0.4) + 
+  facet_wrap(~factor(Island, 
+                     levels = c("rota", "Saipan", "SWIFT03"), 
+                     labels = c("Rota", "Saipan", "Aguiguan")), ncol = 1) + 
+  xlim(0, 15) + 
+  xlab("Song duration\n(seconds)") + 
+  ylab("Number of Songs") + 
+  theme_bw()
+song_length_plot
+
+freq_plot <- ggplot(data = margo_dove) + 
+  geom_histogram(aes(x = Freq_peak_S1), binwidth = 12) + 
+  facet_wrap(~factor(Island, 
+                     levels = c("rota", "Saipan", "SWIFT03"), 
+                     labels = c("Rota", "Saipan", "Aguiguan")), ncol = 1) + 
+  ylab("Number of songs") + 
+  xlab("Frequency of first syllable (Hz)") + 
+  xlim(0, NA) + 
+  theme_bw()
+freq_plot
+
+ggplot(data = margo_dove) +
+  geom_boxplot(aes(x = Island, y = Freq_peak_S1))
+
+
+
+
+
 
 
 
