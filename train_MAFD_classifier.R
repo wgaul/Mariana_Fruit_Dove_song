@@ -2,13 +2,24 @@
 ## Train automated identification model for Mariana Fruit Dove songs
 ## in sound recordings
 ## 
+## TODO: Add acoustic indices for: 
+##   - Ellie Saipan random minute ARU recordings
+##   - targeted hand-held MAFD recordings (e.g. my recordings posted to eBird)
+##   - Consider taking equal numbers of detections and non-detections from each
+##      file for traning data, to avoid the model learning background noise 
+##      associated with time of day (e.g. from early morning recordings where 
+##      there is a single song during 2 hours of recording)
+## 
 ## author: Willson Gaul  willson.gaul@gmail.com
 ## created: 24 June 2022
-## last modified: 29 June 2022
+## last modified: 30 June 2022
 ######################
 
-library(wgutil)
 library(Hmisc)
+library(pROC)
+# library(psych)
+library(wgutil)
+library(randomForest)
 library(tidyverse)
 library(lubridate)
 
@@ -36,6 +47,13 @@ a_dat <- a_dat[-c(1:29), ]
 
 # convert "x" marks to TRUE
 a_dat[, 3:20] <- !is.na(a_dat[, 3:20]) 
+
+a_dat_pos <- a_dat[which(a_dat$MAFD == TRUE), ]
+a_dat_neg <- a_dat[which(a_dat$MAFD == FALSE), ]
+
+# get equal numbers of dets and nondets from alex's recordings
+a_dat <- slice_sample(a_dat_neg, n = nrow(a_dat_pos)) %>%
+  bind_rows(a_dat_pos)
 ### end load Alex's data
 
 
@@ -80,21 +98,12 @@ mq$seg_id <- paste(mq$filename, mq$sec_interval, sep = "_")
 mq$MAFD <- TRUE # all TRUE b/c margo was measuring songs
 ########### end load data
 
-
-## make a df for Mariana Fruit Dove data
-mafd_df <- a_dat[, which(colnames(a_dat) %in% 
-                           c("filename", "seg_id", 
-                             "MAFD"))]
-mafd_df <- bind_rows(mafd_df, mq[, which(colnames(mq) %in% 
-                                           c("filename", "seg_id", 
-                                             "MAFD"))])
-table(mafd_df$filename)
-summary(as.numeric(table(mafd_df$seg_id)))
-table(mafd_df$MAFD)
-
 #################################
-## Match acoustic index values to Alex's annotated minutes
+## Match acoustic index values to annotated minutes
 # set location of Towsey index data
+# TODO: Add acoustic indices for: 
+#   - Ellie Saipan random minute ARU recordings
+#   - targeted hand-held MAFD recordings (e.g. my recordings posted to eBird)
 forest_traj_data_location <- "~/Documents/Saipan_ecology/haldre_forest_trajectories/forest trajectories/data/raw/SoundRecorder/IndicesOutput/Towsey.Acoustic/"
 aguiguan_aru_data_location <- "~/Documents/Saipan_ecology/data/audio_recordings/IndicesOutput/Towsey.Acoustic/"
 acoustic_index_files <- list(ACI = c(), BGN = c(), CVR = c(), DIF = c(), 
@@ -153,96 +162,251 @@ for(i in 1:length(acoustic_index_files)) {
   acoustic_index_files[[i]]$seg_id <- paste(
     acoustic_index_files[[i]]$filename, acoustic_index_files[[i]]$sec_interval, 
     sep = "_")
+  colnames(acoustic_index_files[[i]])[which(
+    grepl(".*c00.*", colnames(acoustic_index_files[[i]])))] <- paste0(
+      ind_name, colnames(acoustic_index_files[[i]])[which(
+        grepl(".*c00.*", colnames(acoustic_index_files[[i]])))]
+    )
 }
+
+
+
+### make a df for Mariana Fruit Dove data
+# sample non-detection minutes from the recordings Margo analyzed
+mq_non_det_sample <- bind_rows(lapply(acoustic_index_files, FUN = function(x) {
+  x[, which(colnames(x) %in% c("filename", "seg_id"))]
+}))
+mq_non_det_sample <- unique(mq_non_det_sample)
+# keep only data from files that are in Margo's data, so that we do not get 
+# training data from times of the day when there are no MAFDs singing
+mq_non_det_sample <- mq_non_det_sample[mq_non_det_sample$filename %in% 
+                                         mq$filename , ]
+
+# select only segments that are not in Margo's data
+mq_non_det_sample <- mq_non_det_sample[mq_non_det_sample %nin% mq$seg_id]
+# select only segments that are not in Alex's data (as either dets or non-dets)
+mq_non_det_sample <- mq_non_det_sample[mq_non_det_sample %nin% a_dat$seg_id]
+# select as many non-detection segments as we have detection segments
+mq_non_det_sample <- slice_sample(mq_non_det_sample, n = nrow(mq), 
+                                  replace = F)
+mq_non_det_sample <- bind_rows(lapply(
+  acoustic_index_files, FUN = function(x, non_det_seg_ids) {
+    x[x$seg_id %in% non_det_seg_ids, ]
+  }, non_det_seg_ids = mq_non_det_sample$seg_id)) %>%
+  select(filename, seg_id) %>%
+  slice_sample(n = sum(mq$MAFD)) %>%
+  mutate(MAFD = FALSE)
+
+# select the columns we want from Alex's data
+mafd_df <- a_dat[, which(colnames(a_dat) %in% 
+                           c("filename", "seg_id", 
+                             "MAFD"))]
+# Add Margo's data
+mafd_df <- bind_rows(mafd_df, mq[, which(colnames(mq) %in% 
+                                           c("filename", "seg_id", 
+                                             "MAFD"))])
+# add non-detections from Margo's recordings
+mafd_df <- bind_rows(mafd_df, mq_non_det_sample)
+
+table(mafd_df$filename)
+summary(as.numeric(table(mafd_df$seg_id)))
+table(mafd_df$MAFD)
+table(mafd_df$MAFD, mafd_df$filename) # we want at least some T and F from each file
+# TODO: Consider taking equal numbers of detections and non-detections from each
+# file for traning data, to avoid the model learning background noise associated
+# with time of day (e.g. from early morning recordings where there is a single
+# song during 2 hours of recording)
+
 
 ###### look at some preliminary correlations to choose predictor vars.
 ## each column is an index value for a frequency band.
-## 256 freq bands for 24000 Hz
-## 24000/256 = 93.75 Hz per frequency band
+## 256 freq bands for 22000 Hz (see Towsey.Acoustic.MAFD30Sec.yml)
+## 22000/256 = 85.94 Hz per frequency band
 ## MAFD is between 300 and 600 Hz. 
-## 300/93.75 = band 3
-## 400/93.75 = band 4
-## 500/93.75 = band 5
-## 600/93.75 = band 6
+## 300/85.94 = 3rd band (named band 2 b/c numbering starts at 0)
+## 400/85.94 = band 3
+## 500/85.94 = band 4
+## 600/85.94 = band 5
+## 700/85.94 = band 7
+## 1000/85.94 = band 10
 ## TODO: Make sure those columns are the frequency bands we want
 warning("We MUST make sure we know what the frequencies of each column are.")
 
-mafd_df <- left_join(mafd_df, acoustic_index_files$ENT[, colnames(
-  acoustic_index_files$ACI) %in% c("c000001", "c000002", "c000003", "c000004", 
-                                   "c000005", "c000006", "c000010", 
-                                   "c0000015", "c000020", "c000200", "seg_id")])
+pred_cols <- c("c000002", "c000003", "c000004", "c000005", "c000006", "c000010", 
+               "c000015", "c000020", "c000200")
+pred_cols <- c(pred_cols, "seg_id")
+
+for(i in 1:length(acoustic_index_files)) {
+  preds <- paste0(acoustic_index_files[[i]]$acoustic_index[1], pred_cols)
+  mafd_df <- left_join(
+    mafd_df, acoustic_index_files[[i]][, which(
+      colnames(acoustic_index_files[[i]]) %in% c("filename", "seg_id", preds))])
+}
 
 # which column have predictor variables right now? (for quick exploration)
 names(mafd_df)
-for(cvar in c("c000001", "c000002", "c000003", "c000004", 
-              "c000005", "c000006", "c000010", 
-              "c0000015", "c000020", "c000200")) {
+pdf("explore_MAFD_predictor_indices.pdf")
+for(cvar in colnames(mafd_df)[4:ncol(mafd_df)]) {
   plt <- ggplot(data = mafd_df, aes(x = .data[[cvar]])) + 
-    geom_histogram() + 
+    geom_histogram(bins = 100) + 
     facet_wrap(~MAFD, ncol = 1) + 
     theme_bw()
   print(plt)
+  
+  plt <- ggplot(data = mafd_df, aes(x = MAFD, y = .data[[cvar]])) + 
+    geom_boxplot() + 
+    geom_point() + 
+    theme_bw()
+  print(plt)
 }
+dev.off()
 
-ggplot(data = mafd_df, aes(x = c000005)) + 
-  geom_histogram() + 
-  facet_wrap(~MAFD, ncol = 1) + 
-  theme_bw()
-
-
-
+# look at particular predictors by file name
+ggplot(data = mafd_df, aes(x = droplevels(factor(filename)), y = SUMc000002, 
+                           color = MAFD)) + 
+  geom_boxplot() + 
+  # geom_point() +
+  theme(axis.text.x = element_text(angle = -90))
 
 ############################
 ## Run automated detection model
+## Fit a random forest model
+
+# specify which predictor variables to use based on a-priori expectations b/c
+# of frequency of songs, and preliminary visual exploration of correlation 
+# between song presence and acoustic index values
+# chosen_preds <- c("ACIc000002", 
+#                   "BGNc000002", "BGNc000004", "BGNc000006", "BGNc0000010", 
+#                   "BGNc000200", 
+#                   "CVRc000010", 
+#                   "DIFc000002", "DIFc000004", "DIFc000006", "DIFc0000010", 
+#                   "DIFc000015", 
+#                   "ENTc000002", "ENTc000003", 
+#                   "EVNc000010", 
+#                   "OSCc000005", "OSCc000015", 
+#                   "RPSc000005", "OSCc000006", "OSCc0000010", 
+#                   "SUMc000002", "SUMc000003", "SUMc000004")
+
+chosen_preds <- c("EVNc000004", "EVNc000005", "EVNc000010", 
+                  "OSCc000015", 
+                  "SPTc000002", "SPTc000004")
+
+mafd_df <- mafd_df[, which(colnames(mafd_df) %in% c("filename", "seg_id", 
+                                                    "MAFD", chosen_preds))]
+
+# specify CV folds
+mafd_df$fold <- sample(1:3, size = nrow(mafd_df), replace = T)
+
+# drop rows for which we do not have predictor data
+mafd_df <- mafd_df[complete.cases(mafd_df), ]
+
+## fit model
+mafd_df$pred_test_fold <- NA
+mafd_df$pred_train_fold <- NA
+mafd_mods <- list()
+for(tst_fold in unique(mafd_df$fold)) {
+  # train model using training data folds
+  train_dat <- mafd_df[mafd_df$fold != tst_fold, ]
+  mod_rf <- randomForest(x = train_dat[, grepl("...c0.*", colnames(train_dat))], 
+                         y = factor(as.character(train_dat$MAFD), 
+                                    levels = c("TRUE", "FALSE"), 
+                                    labels = c("TRUE", "FALSE")), 
+                         ntree = 2000, replace = T, importance = T, 
+                         nodesize = 1)
+  # get predictions to test CV fold
+  mafd_df$pred_test_fold[mafd_df$fold == tst_fold] <- predict(
+    mod_rf, 
+    newdata = mafd_df[mafd_df$fold == tst_fold, 
+                      which(colnames(mafd_df) %nin% 
+                              c("pred_test_fold", "pred_train_fold"))], 
+    type = "prob")[, "TRUE"]
+  mafd_df$pred_train_fold[mafd_df$fold != tst_fold] <- predict(
+    mod_rf, 
+    newdata = mafd_df[mafd_df$fold != tst_fold, 
+                      which(colnames(mafd_df) %nin% 
+                              c("pred_test_fold", "pred_train_fold"))], 
+    type = "prob")[, "TRUE"]
+  
+  # save fitted model in list
+  mafd_mods[[tst_fold]] <- mod_rf
+}
+mafd_mods
+
+## evaluate model performance (this is CV performance)
+# AUC on training folds
+roc(
+  response = factor(as.character(mafd_df$MAFD), 
+                    labels = c("1", "0"), 
+                    levels = c("TRUE", "FALSE")), 
+  predictor = mafd_df$pred_train_fold, 
+  levels = c("0", "1"), direction = "<", plot = T)
+
+# AUC on test folds
+roc(
+  response = factor(as.character(mafd_df$MAFD), 
+                    labels = c("1", "0"), 
+                    levels = c("TRUE", "FALSE")), 
+  predictor = mafd_df$pred_test_fold, 
+  levels = c("0", "1"), direction = "<", plot = T)
+
+# Kappa
+thresh <- as.numeric(seq(from = 0, to = 1, by = 0.05))
+names(thresh) <- thresh
+kappas <- sapply(thresh, FUN = function(thresh, dat) {
+  vals <- data.frame(resp = factor(as.character(dat$MAFD), 
+                                   levels = c("TRUE", "FALSE"), 
+                                   labels = c("TRUE", "FALSE")), 
+                     pred = factor(as.numeric(dat$pred_test_fold) > thresh))
+  psych::cohen.kappa(vals)$kappa
+  psych::cohen.kappa(vals)$kappa
+}, dat = mafd_df)
+kappas
+plot(kappas ~ as.numeric(names(kappas)))
+
+# max Cohen's Kappa (CV)
+max(kappas)
+
+# set threshold for prediction 
+# Can use maximised kappa, or adjust to prioritize sensitivity or specificity
+thresh <- as.numeric(names(kappas)[which(kappas == max(kappas))])[1]
+
+# sensitivity at threshold that maximised Kappa
+sensitivity(threshold = thresh, 
+            responses = mafd_df$MAFD, 
+            predictions = as.numeric(mafd_df$pred_test_fold))
+# specificity at threshold that maximised Kappa
+specificity(threshold = thresh, 
+            responses = mafd_df$MAFD, 
+            predictions = as.numeric(mafd_df$pred_test_fold))
 
 
+## look at variable importance (just for the last model that fitted)
+# TODO: loop this to look at all CV models
+var_imp <- data.frame(mod_rf$importance)
+var_imp$var <- rownames(var_imp)
+var_imp <- var_imp[order(var_imp$MeanDecreaseGini, decreasing = T), ]
+var_imp$var <- factor(as.character(var_imp$var), levels = var_imp$var, 
+                      labels = var_imp$var,)
+ggplot(data = var_imp, 
+       aes(x = MeanDecreaseGini, y = var)) + 
+  geom_col()
 
+# get partial dependence for each variable
+pl <- list()
+for(vb in 1:length(var_imp$var)) {
+  pd <- data.frame(partialPlot(mod_rf, 
+                               pred.data = data.frame(mafd_df), 
+                               x.var = as.character(var_imp$var)[vb], 
+                               which.class = "TRUE", plot = FALSE))
+  pd$variable <- var_imp$var[vb]
+  pl[[vb]] <- pd
+}
+pl <- bind_rows(pl)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-############# Old attempt at joining acoustic indices to bird data
-# empty_index_names_df <- data.frame(
-#   matrix(nrow = 1, ncol = length(names(acoustic_index_files))))
-# colnames(empty_index_names_df) <- names(acoustic_index_files)
-# a_dat <- bind_cols(a_dat, empty_index_names_df)
-# rm(empty_index_names_df)
-
-# this array will have the dimensions as follows:
-# dim 1 (rows) = 30 second recording segments
-# dim 2 (cols) = bird species, 
-# dim 3 (slices) = acoustic indices, 
-# dim 4 (??) = frequency bins
-# bird_array <- array(NA, dim = c(nrow(a_dat), ncol(a_dat), 
-#                                 length(acoustic_index_files), 256), 
-#                   dimnames = list(a_dat$seg_id, colnames(a_dat)[bird_sp_cols], 
-#                                   names(acoustic_index_files),
-#                                   colnames(acoustic_index_files$ACI)[2:257]))
-# 
-# 
-# # bind all acoustic index values into a single df
-# acoustic_indices <- bind_rows(acoustic_index_files)
-# rm(acoustic_index_files)
-
-# add acoustic index values for all indices to each segment in hand-labelled
-# bird identifications data frame
-
-
-osc_data <- left_join(osc_data, bat_calls, by = c("filename" = "filename", 
-                                                  "Index" = "minute"))
-
+ggplot(data = pl, aes(x = x, y = y)) + 
+  geom_point() + 
+  geom_line() + 
+  facet_wrap(~factor(variable)) + 
+  ggtitle("partial dependence") + 
+  theme_bw()
 
