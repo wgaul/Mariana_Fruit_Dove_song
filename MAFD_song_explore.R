@@ -9,7 +9,7 @@
 library(tidyverse)
 library(GGally)
 
-setwd("~/Documents/Data_Analysis/bird_song/")
+setwd("~/Documents/Data_Analysis/bird_song/Mariana_Fruit_Dove_song/")
 
 # dove_song <- read_csv("./data/Jaden_Fruit_Dove_Sound_Data.csv",
                       # na = c("NA", "N/A", ""))

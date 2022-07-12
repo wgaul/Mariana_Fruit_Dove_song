@@ -115,7 +115,7 @@ acoustic_index_files <- list(ACI = c(), BGN = c(), CVR = c(), DIF = c(),
 for(i in 1:length(acoustic_index_files)) {
   # get file names for all acoustic index .csv files
   ind_name <- names(acoustic_index_files)[i]
-  # ...for forest trajectory recordigs
+  # ...for forest trajectory recordings
   for_traj_dat <- list.files(forest_traj_data_location)
   for_traj_dat <- for_traj_dat[grepl(
     paste0(".*", ind_name, ".csv"), 
