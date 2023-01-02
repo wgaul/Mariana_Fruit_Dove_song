@@ -15,7 +15,17 @@ margo_dove$island <- factor(as.character(margo_dove$island),
 
 ggplot(data = margo_dove, aes(x = Freq_peak_S1)) + 
   geom_histogram() + 
-  facet_wrap(~island, ncol = 1)
+  facet_wrap(~ island, ncol = 1)
+
+
+ggplot(data = margo_dove, aes(x = month, y = Freq_peak_S1)) + 
+  geom_point(aes(colour = recorder)) + 
+  geom_smooth()
+
+ggplot(data = margo_dove, aes(x = location_id, y = S1_to_S2)) + 
+  geom_boxplot() + 
+  geom_point()
+
 
 
 # fit linear model

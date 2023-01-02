@@ -3,11 +3,13 @@
 ## 
 ## author: Willson Gaul  willson.gaul@gmail.com
 ## created: 11 July 2022
-## last modified: 12 July 2022
+## last modified: 1 January 2023
 ######################
 
-margo_dove <- read_csv("../data/Margo_Fruit_Dove_Sound_Data_12July2022.csv")
+margo_dove <- read_csv("../data/Margo_Fruit_Dove_Sound_Data_12Aug2022.csv")
+wg_ebird <- read_csv("../data/wg_ebird_data_01Jan2023.csv")
 
+## ------------- Margo data -------------------
 # drop blank rows
 margo_dove <- margo_dove[which(!is.na(margo_dove$filename)), ]
 
@@ -61,9 +63,10 @@ ml_met$date_ddmmyyyy <- as.Date(ml_met$date_ddmmyyyy,
 
 # join all metadata
 met <- bind_rows(wg_met, ag_met) %>%
-  bind_rows(ml_met) %>%
-  select(-gain_setting, -captivity, -distance_to_target_m, -species, 
-         -common_name, -notes)
+  bind_rows(ml_met) 
+# %>%
+#   select(-gain_setting, -captivity, -distance_to_target_m, -species, 
+#          -common_name, -notes)
 
 met$filename <- gsub(".wav|.WAV|.mp3", "", met$filename)
 
@@ -114,3 +117,59 @@ margo_dove$`start_time_of_song_hh:mm:ss` <- as.POSIXct(
   format = "%H:%M:%S")
 
 colnames(margo_dove) <- gsub(":", "", colnames(margo_dove))
+
+## ---------------- end Margo Data ----------------------------
+
+
+## ---------------- wg eBird data --------------------------
+# subset to Mariana Islands (CNMI and Guam)
+wg_ebird <- wg_ebird[wg_ebird$Latitude < 20 & wg_ebird$Longitude > 120, ]
+
+# find locations at which a MAFD was ever observed
+locs_mafd <- unique(wg_ebird$`Location ID`[wg_ebird$`Scientific Name` == "Ptilinopus roseicapilla"])
+
+# subset to only MAFD locations
+wg_ebird <- wg_ebird[wg_ebird$`Location ID` %in% locs_mafd, ]
+
+wg_ebird_wide <- wg_ebird[, which(colnames(wg_ebird) %in% 
+                            c("Submission ID", "Scientific Name", "Count", 
+                              "State/Province", "Location ID", 
+                              "Location", "Latitude", "Longitude", 
+                              "Date", "Time", "Protocol", "Duration (Min)", 
+                              "All Obs Reported", "Distance Traveled (km)", 
+                              "Number of Observers"))]
+wg_ebird_wide <- pivot_wider(wg_ebird_wide, names_from = "Scientific Name",
+                             values_from = "Count", 
+                             values_fill = 0)
+
+wg_ebird_wide <- wg_ebird_wide[order(wg_ebird_wide$`Submission ID`), ]
+
+# drop incomplete checklists
+wg_ebird_wide <- wg_ebird_wide[wg_ebird_wide$`All Obs Reported` == 1, ]
+# Fill distance traveled with 0 if NA
+wg_ebird_wide$`Distance Traveled (km)`[which(
+  is.na(wg_ebird_wide$`Distance Traveled (km)`))] <- 0
+
+# Make a column indicating whether MAFD was singing on the checklist
+wg_ebird_wide$breeding_code_MAFD <- NA
+for(i in 1:nrow(wg_ebird_wide)) {
+  dat <- wg_ebird[wg_ebird$`Submission ID` == wg_ebird_wide$`Submission ID`[i] &
+                    wg_ebird$`Scientific Name` == "Ptilinopus roseicapilla", ]
+  if(nrow(dat) > 1) stop("I think dat should only ever be 1 row.  It is a df of this species on a single checklist.")
+  # fill Breeding code if this checklist had a MAFD on it
+  if(nrow(dat) > 0) wg_ebird_wide$breeding_code_MAFD[i] <- dat$`Breeding Code`
+}
+
+# add day_of_year column
+wg_ebird_wide$day_of_year <- yday(wg_ebird_wide$Date)
+wg_ebird_wide$month <- month(wg_ebird_wide$Date)
+
+colnames(wg_ebird_wide) <- gsub(" ", "_", colnames(wg_ebird_wide))
+colnames(wg_ebird_wide) <- gsub("\\(|\\)", "", colnames(wg_ebird_wide))
+
+# make Location_ID a factor as required by mgcv
+wg_ebird_wide$Location_ID <- factor(as.character(wg_ebird_wide$Location_ID))
+# make time number of seconds after midnight
+wg_ebird_wide$tod_sec <- as.numeric(wg_ebird_wide$Time)
+
+## ------------- end wg eBird data -------------------------
